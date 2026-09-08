@@ -102,6 +102,15 @@ export const matchPattern = (url: string, pattern: string): boolean => {
 };
 
 /**
+ * Strips a `:<port>` from a match pattern's host portion, e.g.
+ * `*://localhost:5173/*` → `*://localhost/*`. Patterns without a port are
+ * returned unchanged. Used to work around `chrome.tabs.query`'s lack of port
+ * support — see {@link findAllMatchingTabs}.
+ */
+const stripPatternPort = (pattern: string): string =>
+  pattern.replace(/^(\*|https?|ftp):\/\/([^/]+?):\d+\//, '$1://$2/');
+
+/**
  * Finds all open tabs matching a plugin's URL patterns, sorted by rank (best first).
  *
  * Ranking prefers (in order):
@@ -122,17 +131,25 @@ export const findAllMatchingTabs = async (plugin: PluginMeta): Promise<chrome.ta
   const allMatches: chrome.tabs.Tab[] = [];
 
   for (const pattern of plugin.urlPatterns) {
+    // chrome.tabs.query's url filter, like content_scripts.matches/host_permissions,
+    // doesn't support a port in the pattern's host — it throws, and the whole pattern
+    // is silently dropped by the catch below. Query with the port stripped (matches
+    // any port on that host), then re-verify the exact port with matchPattern (which
+    // does support it) before accepting a tab. This is a no-op for patterns that had
+    // no port: queryPattern === pattern and chrome's own filtering already sufficed.
+    const queryPattern = stripPatternPort(pattern);
+    const hadPort = queryPattern !== pattern;
     let tabs: chrome.tabs.Tab[];
     try {
-      tabs = await chrome.tabs.query({ url: pattern });
+      tabs = await chrome.tabs.query({ url: queryPattern });
     } catch {
       continue;
     }
     for (const tab of tabs) {
-      if (tab.id !== undefined && !seen.has(tab.id)) {
-        seen.add(tab.id);
-        allMatches.push(tab);
-      }
+      if (tab.id === undefined || seen.has(tab.id)) continue;
+      if (hadPort && !(tab.url && matchPattern(tab.url, pattern))) continue;
+      seen.add(tab.id);
+      allMatches.push(tab);
     }
   }
 

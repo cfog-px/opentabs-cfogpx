@@ -347,6 +347,34 @@ describe('findAllMatchingTabs', () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.id).toBe(1);
   });
+
+  test('a pattern with a port queries chrome.tabs with the port stripped, then filters by exact port', async () => {
+    const rightPort = makeTab(1, { url: 'http://localhost:5173/app' });
+    const wrongPort = makeTab(2, { url: 'http://localhost:9999/other' });
+
+    // chrome.tabs.query can't be given a port — the plugin's pattern keeps the
+    // port, but the query sent to chrome must have it stripped.
+    queryResults.set('*://localhost/*', [rightPort, wrongPort]);
+
+    const result = await findAllMatchingTabs(makePlugin(['*://localhost:5173/*']));
+    expect(result.map(t => t.id)).toEqual([1]);
+  });
+
+  test('a port pattern excludes a same-host tab with no url (cannot verify the exact port)', async () => {
+    const noUrlTab = makeTab(1);
+    queryResults.set('*://localhost/*', [noUrlTab]);
+
+    const result = await findAllMatchingTabs(makePlugin(['*://localhost:5173/*']));
+    expect(result).toEqual([]);
+  });
+
+  test('a plain non-port pattern is queried and matched unchanged', async () => {
+    const tab = makeTab(1, { active: true, windowId: FOCUSED_WINDOW_ID });
+    queryResults.set('*://example.com/*', [tab]);
+
+    const result = await findAllMatchingTabs(makePlugin(['*://example.com/*']));
+    expect(result.map(t => t.id)).toEqual([1]);
+  });
 });
 
 describe('findAllMatchingTabs — tab title passthrough', () => {
