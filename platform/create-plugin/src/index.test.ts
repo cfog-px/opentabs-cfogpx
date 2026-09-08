@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
@@ -219,12 +220,35 @@ describe('create-opentabs-plugin CLI', () => {
 
       const deps = pkg.dependencies as Record<string, string> | undefined;
       const devDeps = pkg.devDependencies as Record<string, string> | undefined;
+      const peerDeps = pkg.peerDependencies as Record<string, string> | undefined;
 
       if (deps?.['@opentabs-dev/plugin-sdk']) {
         deps['@opentabs-dev/plugin-sdk'] = localSdk;
       }
       if (devDeps?.['@opentabs-dev/plugin-tools']) {
         devDeps['@opentabs-dev/plugin-tools'] = localPluginTools;
+      }
+
+      // Pin zod to the exact version plugin-sdk itself resolves (walking up from its
+      // own directory, same as Node/tsc module resolution would — node_modules may
+      // be hoisted at the worktree root, the repo root, or higher up, so this can't
+      // be a fixed path). Without this, the scaffolded project's own `npm install`
+      // grabs the latest registry zod matching '^4.0.0', which is very likely a
+      // different minor version — e.g. 4.3.6 (monorepo) vs 4.5.4 (registry) as of
+      // this writing. tsc then has to structurally compare two distinct copies of
+      // zod's deeply recursive generic types (plugin-sdk's vs the scaffold's own
+      // `z.object(...)` usage), which reliably crashes with a native stack overflow
+      // (SIGABRT) rather than a catchable TS error. Reproduced and confirmed by
+      // pinning both sides to the same version.
+      const zodPkgPath = createRequire(import.meta.url).resolve('zod/package.json', {
+        paths: [join(PLATFORM_DIR, 'platform', 'plugin-sdk')],
+      });
+      const { version: monorepoZodVersion } = JSON.parse(await readFile(zodPkgPath, 'utf-8')) as { version: string };
+      if (devDeps?.zod) {
+        devDeps.zod = monorepoZodVersion;
+      }
+      if (peerDeps?.zod) {
+        peerDeps.zod = monorepoZodVersion;
       }
 
       // Ensure transitive workspace:* deps from file:-linked packages can resolve.
